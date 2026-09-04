@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Reflection;
-using System.Threading;
 using System.Windows.Forms;
 
 namespace DshTray
@@ -14,7 +13,6 @@ namespace DshTray
     {
         private readonly string _appTitle = getAppTitle();
         private NotifyIcon _notifyIcon;
-        //private Process _dshProcess;
 
         public DshTrayApp()
         {
@@ -30,7 +28,7 @@ namespace DshTray
             if (attrs.Length > 0)
             {
                 var titleAttr = (AssemblyTitleAttribute)attrs[0];
-                string title = titleAttr.Title;  // 如 "DshTray"
+                string title = titleAttr.Title;  // AssemblyInfo.cs 中的 AssemblyTitle
                 return title;
             }
             return "DeepSeek Harness Tray";
@@ -88,7 +86,6 @@ namespace DshTray
                 "服务已启动", ToolTipIcon.Info);
         }
 
-
         private Icon LoadIcon()
         {
             try
@@ -101,6 +98,7 @@ namespace DshTray
                 return CreateDefaultIcon();
             }
         }
+
         private Icon CreateDefaultIcon()
         {
             using (var bitmap = new Bitmap(32, 32))
@@ -132,7 +130,6 @@ namespace DshTray
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
-                //_dshProcess = Process.Start(psi);
                 Process.Start(psi);
             }
             catch (Win32Exception ex)
@@ -279,8 +276,6 @@ namespace DshTray
         private void RestartDsh()
         {
             StopDsh();
-            Thread.Sleep(1000); // 等待一秒钟确保进程已终止
-
             StartDsh();
             _notifyIcon.ShowBalloonTip(2000, _appTitle, 
                 "服务已重启", ToolTipIcon.Info);
