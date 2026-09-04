@@ -17,7 +17,12 @@ namespace DshTray
             var mutex = new Mutex(true, "DshTray_SingleInstance", out createdNew);
             if (!createdNew)
             {
-                MessageBox.Show("DSH Web 已有一个实例在运行", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                var result =MessageBox.Show("DshTray 已有一个实例在运行，是否需要打开窗口？", "提示", 
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+                if (result == DialogResult.OK)
+                {
+                    DshTrayApp.OpenBrowser();
+                }
                 Application.Exit();
                 return;
             }

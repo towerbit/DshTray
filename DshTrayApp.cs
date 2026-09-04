@@ -14,7 +14,7 @@ namespace DshTray
     {
         private readonly string _appTitle = getAppTitle();
         private NotifyIcon _notifyIcon;
-        private Process _dshProcess;
+        //private Process _dshProcess;
 
         public DshTrayApp()
         {
@@ -101,7 +101,6 @@ namespace DshTray
                 return CreateDefaultIcon();
             }
         }
-
         private Icon CreateDefaultIcon()
         {
             using (var bitmap = new Bitmap(32, 32))
@@ -133,13 +132,67 @@ namespace DshTray
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden
                 };
-                _dshProcess = Process.Start(psi);
+                //_dshProcess = Process.Start(psi);
+                Process.Start(psi);
             }
             catch (Win32Exception ex)
             {
                 _notifyIcon.ShowBalloonTip(3000, _appTitle, 
                     "服务启动出错: " + ex.Message, ToolTipIcon.Error);
             }
+        }
+
+        private void StopDsh()
+        {
+            // 通过端口号查找并关闭实际的 node.exe 进程
+            int port = Properties.Settings.Default.WebPort;
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    //FileName = "netstat",
+                    //Arguments = "-ano",
+                    FileName = "cmd",
+                    Arguments = $"/c netstat -ano | findstr \"127.0.0.1:{port} \"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true
+                };
+
+                using (var proc = Process.Start(psi))
+                {
+                    var lines = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit();
+
+                    foreach (var line in lines.Split('\n'))
+                    {
+                        // 查找监听指定端口的进程，格式如:
+                        //   TCP    127.0.0.1:53080        0.0.0.0:0              LISTENING       6072
+                        //if (line.Contains($"127.0.0.1:{port}") && line.Contains("LISTENING"))
+                        if(line.Contains("LISTENING"))
+                        {
+                            var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                            var pidStr = parts[parts.Length - 1].Trim();
+                            if (int.TryParse(pidStr, out int pid))
+                            {
+                                try
+                                {
+                                    var procToKill = Process.GetProcessById(pid);
+                                    procToKill.Kill();
+                                    Debug.Print($"DBUG : {procToKill.ProcessName} 进程 {pid} 已被终止");
+                                    procToKill.WaitForExit(3000);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.Print("WARN : " + ex.Message);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         /// <summary>
@@ -192,7 +245,7 @@ namespace DshTray
             return null;
         }
 
-        private void OpenBrowser()
+        internal static void OpenBrowser()
         {
             var appUrl = $"http://127.0.0.1:{Properties.Settings.Default.WebPort}";
             // 优先尝试使用 Edge PWA 方式打开
@@ -225,15 +278,9 @@ namespace DshTray
 
         private void RestartDsh()
         {
-            if (_dshProcess != null && !_dshProcess.HasExited)
-            {
-                try 
-                { 
-                    _dshProcess.Kill(); 
-                    _dshProcess.WaitForExit(2000); 
-                } 
-                catch { }
-            }
+            StopDsh();
+            Thread.Sleep(1000); // 等待一秒钟确保进程已终止
+
             StartDsh();
             _notifyIcon.ShowBalloonTip(2000, _appTitle, 
                 "服务已重启", ToolTipIcon.Info);
@@ -241,15 +288,7 @@ namespace DshTray
 
         private void ExitApp()
         {
-            if (_dshProcess != null && !_dshProcess.HasExited)
-            {
-                try 
-                {
-                    _dshProcess.Kill(); 
-                    _dshProcess.WaitForExit(2000); 
-                } 
-                catch { }
-            }
+            StopDsh();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
             Application.Exit();
