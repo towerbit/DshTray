@@ -307,7 +307,7 @@ namespace DshTray
                 try
                 {
                     // Edge PWA 模式参数
-                    var args = $"--app={appUrl} --app-id=pnnhogighjicmpdjhpopooneegkiocle";
+                    var args = $"--app={appUrl} --app-id=deepseek-harness-web";
                     var psi = new ProcessStartInfo
                     {
                         FileName = edgePath,
