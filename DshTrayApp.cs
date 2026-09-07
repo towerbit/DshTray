@@ -19,6 +19,7 @@ namespace DshTray
             CheckDshInstalled();
             InitializeComponent();
             StartDsh();
+            OpenBrowser();
         }
 
         private static string getAppTitle()
@@ -70,20 +71,74 @@ namespace DshTray
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("打开窗口", null, (s, e) => OpenBrowser());
             contextMenu.Items.Add("重启服务", null, (s, e) => RestartDsh());
+            contextMenu.Items.Add("关于", null, (s, e) => ShowAbout());
             contextMenu.Items.Add(new ToolStripSeparator());
-            contextMenu.Items.Add("退出 DshTray", null, (s, e) => ExitApp());
+            contextMenu.Items.Add("退出", null, (s, e) => ExitApp());
 
             _notifyIcon = new NotifyIcon
             {
                 Icon = LoadIcon(),
-                Text = _appTitle,
+                //Text = _appTitle,
+                BalloonTipTitle = _appTitle,
                 Visible = true,
                 ContextMenuStrip = contextMenu
             };
 
             _notifyIcon.DoubleClick += (s, e) => OpenBrowser();
-            _notifyIcon.ShowBalloonTip(3000, _appTitle, 
-                "服务已启动", ToolTipIcon.Info);
+            _notifyIcon.ShowBalloonTip(3000, "", 
+                "dsh web 服务已启动", ToolTipIcon.Info);
+        }
+
+        private void ShowAbout()
+        {
+            var sbVersion = new System.Text.StringBuilder();
+
+            // 1. 获取 DshTray 版本号
+            var trayVersion = Assembly.GetExecutingAssembly().GetName().Version;
+            sbVersion.AppendLine($"DshTray : {trayVersion}");
+
+            // 2. dsh --version 获取主进程版本号
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = "cmd",
+                    Arguments = "/c dsh --version",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                using (var proc = Process.Start(psi))
+                {
+                    var output = proc.StandardOutput.ReadToEnd();
+                    var error = proc.StandardError.ReadToEnd();
+                    proc.WaitForExit(5000);
+
+                    if (!string.IsNullOrWhiteSpace(output))
+                    {
+                        sbVersion.AppendLine($"DeepSeek Harness: {output.Trim()}");
+                    }
+                    else if (!string.IsNullOrWhiteSpace(error))
+                    {
+                        sbVersion.AppendLine($"DeepSeek Harness: {error.Trim()}");
+                    }
+                    else
+                    {
+                        sbVersion.AppendLine("DeepSeek Harness: 未知版本");
+                    }
+                }
+            }
+            catch
+            {
+                sbVersion.AppendLine("DeepSeek Harness: 获取版本失败");
+            }
+
+            sbVersion.AppendLine();
+            sbVersion.AppendLine("访问 https://github.com/towerbit/DshTray 了解更多信息");
+
+            _notifyIcon.ShowBalloonTip(6000, "",
+                 sbVersion.ToString().Trim(), ToolTipIcon.Info);
         }
 
         private Icon LoadIcon()
@@ -134,8 +189,8 @@ namespace DshTray
             }
             catch (Win32Exception ex)
             {
-                _notifyIcon.ShowBalloonTip(3000, _appTitle, 
-                    "服务启动出错: " + ex.Message, ToolTipIcon.Error);
+                _notifyIcon.ShowBalloonTip(3000, "",
+                    "dsh web 服务启动出错: " + ex.Message, ToolTipIcon.Error);
             }
         }
 
@@ -277,8 +332,8 @@ namespace DshTray
         {
             StopDsh();
             StartDsh();
-            _notifyIcon.ShowBalloonTip(2000, _appTitle, 
-                "服务已重启", ToolTipIcon.Info);
+            _notifyIcon.ShowBalloonTip(2000, "",
+                "dsh web 服务已重启", ToolTipIcon.Info);
         }
 
         private void ExitApp()
