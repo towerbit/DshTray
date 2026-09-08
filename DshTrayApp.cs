@@ -4,20 +4,30 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.IO.Pipes;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace DshTray
 {
     public class DshTrayApp : ApplicationContext
     {
+        internal const string PIPE_NAME = "DshTray_OpenWindow_Pipe";
+        internal const string OPEN_MESSAGE = "OPEN";
+
         private readonly string _appTitle = getAppTitle();
         private NotifyIcon _notifyIcon;
+        private string _appUrl = string.Empty;
+        private CancellationTokenSource _pipeServerCts;
+        private NamedPipeServerStream _pipeServer;
 
         public DshTrayApp()
         {
-            CheckDshInstalled();
             InitializeComponent();
+            StartPipeServer();
+            StopDsh();
             StartDsh();
             OpenBrowser();
         }
@@ -33,37 +43,6 @@ namespace DshTray
                 return title;
             }
             return "DeepSeek Harness Tray";
-        }
-
-        /// <summary>
-        /// 检查 DSH 是否已本地安装
-        /// </summary>
-        private void CheckDshInstalled()
-        {
-            bool isInstalled = false;
-            try
-            {
-                var psi = new ProcessStartInfo
-                {
-                    FileName = "dsh",
-                    Arguments = "--version",
-                    UseShellExecute = true,
-                    CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden,
-                };
-                using (var process = Process.Start(psi))
-                {
-                    process.WaitForExit(3000);
-                    isInstalled = process.ExitCode == 0;
-                }
-            }
-            catch { }
-            
-            if (!isInstalled) {
-                MessageBox.Show("未检测到 DeepSeek Harness 安装。\n\n请访问 https://github.com/deepseek-ai/deepseek-harness 获取安装说明。",
-                        "DeepSeek Harness 未安装", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                Application.Exit();
-            }
         }
 
         private void InitializeComponent()
@@ -85,8 +64,6 @@ namespace DshTray
             };
 
             _notifyIcon.DoubleClick += (s, e) => OpenBrowser();
-            _notifyIcon.ShowBalloonTip(3000, "", 
-                "dsh web 服务已启动", ToolTipIcon.Info);
         }
 
         private void ShowAbout()
@@ -175,17 +152,69 @@ namespace DshTray
         {
             try
             {
+                _notifyIcon.ShowBalloonTip(3000, "",
+                    "dsh web 服务正在启动，请稍候...", ToolTipIcon.Info);
                 var psi = new ProcessStartInfo
                 {
-                    //FileName = "dsh",
-                    //Arguments = $"web --no-open --port {Properties.Settings.Default.WebPort}",
-                    FileName ="cmd",
+                    FileName = "cmd",
                     Arguments = $"/c dsh web --no-open --port {Properties.Settings.Default.WebPort}",
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    WindowStyle = ProcessWindowStyle.Hidden
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
-                Process.Start(psi);
+                var dshProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
+                dshProcess.Start();
+
+                _appUrl = string.Empty;
+                try
+                {
+                    var readTask = Task.Factory.StartNew((Action)(() =>
+                    {
+                        try
+                        {
+                            while (!dshProcess.HasExited)
+                            {
+                                var line = dshProcess.StandardOutput.ReadLine();
+                                if (line == null)
+                                {
+                                    break;
+                                }
+
+                                Debug.Print("DSH: " + line);
+
+                                if (line.Contains("http://127.0.0.1:") && line.Contains("?token="))
+                                {
+                                    var trimmed = line.Trim();
+                                    var httpIndex = trimmed.IndexOf("http://", StringComparison.OrdinalIgnoreCase);
+                                    if (httpIndex >= 0)
+                                    {
+                                        var urlPart = trimmed.Substring(httpIndex);
+                                        var spaceIndex = urlPart.IndexOf(' ');
+                                        if (spaceIndex >= 0)
+                                        {
+                                            urlPart = urlPart.Substring(0, spaceIndex);
+                                        }
+
+                                        _appUrl = urlPart;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+                    }), TaskCreationOptions.LongRunning);
+                    while(string.IsNullOrEmpty(_appUrl) && !readTask.IsCompleted)
+                    {
+                        Application.DoEvents();
+                    }
+                    //_notifyIcon.ShowBalloonTip(3000, "",
+                    //    "dsh web 服务已启动", ToolTipIcon.Info);
+                }
+                catch(Exception ex)
+                {
+                    Debug.Print(ex.Message);
+                }
             }
             catch (Win32Exception ex)
             {
@@ -202,8 +231,6 @@ namespace DshTray
             {
                 var psi = new ProcessStartInfo
                 {
-                    //FileName = "netstat",
-                    //Arguments = "-ano",
                     FileName = "cmd",
                     Arguments = $"/c netstat -ano | findstr \"127.0.0.1:{port} \"",
                     UseShellExecute = false,
@@ -221,7 +248,7 @@ namespace DshTray
                         // 查找监听指定端口的进程，格式如:
                         //   TCP    127.0.0.1:53080        0.0.0.0:0              LISTENING       6072
                         //if (line.Contains($"127.0.0.1:{port}") && line.Contains("LISTENING"))
-                        if(line.Contains("LISTENING"))
+                        if (line.Contains("LISTENING"))
                         {
                             var parts = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
                             var pidStr = parts[parts.Length - 1].Trim();
@@ -233,10 +260,14 @@ namespace DshTray
                                     procToKill.Kill();
                                     Debug.Print($"DBUG : {procToKill.ProcessName} 进程 {pid} 已被终止");
                                     procToKill.WaitForExit(3000);
+                                    
+                                    _notifyIcon.ShowBalloonTip(2000, "",
+                                        "dsh web 服务已停止", ToolTipIcon.Info);
                                 }
                                 catch (Exception ex)
                                 {
-                                    Debug.Print("WARN : " + ex.Message);
+                                    _notifyIcon.ShowBalloonTip(2000, "",
+                                        "dsh web 服务停止出错：" + ex.Message, ToolTipIcon.Error);
                                 }
                                 break;
                             }
@@ -297,9 +328,71 @@ namespace DshTray
             return null;
         }
 
-        internal static void OpenBrowser()
+        /// <summary>
+        /// 启动命名管道服务，接收第二个实例发来的 OPEN 消息
+        /// </summary>
+        private void StartPipeServer()
         {
-            var appUrl = $"http://127.0.0.1:{Properties.Settings.Default.WebPort}";
+            _pipeServerCts = new CancellationTokenSource();
+            var token = _pipeServerCts.Token;
+            Task.Run(() => PipeServerLoopAsync(token), token);
+        }
+
+        private async Task PipeServerLoopAsync(CancellationToken token)
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    using (var server = new NamedPipeServerStream(
+                        PIPE_NAME, PipeDirection.In, 1,
+                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous))
+                    {
+                        _pipeServer = server;
+                        await server.WaitForConnectionAsync(token).ConfigureAwait(false);
+
+                        string message;
+                        using (var reader = new StreamReader(server))
+                        {
+                            message = await reader.ReadToEndAsync().ConfigureAwait(false);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(message) &&
+                            message.Trim().Equals(OPEN_MESSAGE, StringComparison.OrdinalIgnoreCase))
+                        {
+                            OpenBrowser();
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch
+                {
+                    // 管道被中断或创建失败，短暂等待后重试
+                    if (token.IsCancellationRequested)
+                    {
+                        break;
+                    }
+                    await Task.Delay(200)
+                              .ConfigureAwait(false);
+                }
+            }
+        }
+
+        private void OpenBrowser()
+        {
+            string appUrl;
+            if (!string.IsNullOrWhiteSpace(_appUrl))
+            {
+                appUrl = _appUrl;
+            }
+            else
+            {
+                appUrl = $"http://127.0.0.1:{Properties.Settings.Default.WebPort}";
+            }
+
             // 优先尝试使用 Edge PWA 方式打开
             var edgePath = FindEdgeBrowser();
             if (!string.IsNullOrEmpty(edgePath))
@@ -323,8 +416,8 @@ namespace DshTray
             // 回退到默认浏览器
             try
             {
-                Process.Start(appUrl); 
-            } 
+                Process.Start(appUrl);
+            }
             catch { }
         }
 
@@ -332,8 +425,6 @@ namespace DshTray
         {
             StopDsh();
             StartDsh();
-            _notifyIcon.ShowBalloonTip(2000, "",
-                "dsh web 服务已重启", ToolTipIcon.Info);
         }
 
         private void ExitApp()
@@ -346,7 +437,18 @@ namespace DshTray
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing && _notifyIcon != null) _notifyIcon.Dispose();
+            if (disposing)
+            {
+                if (_pipeServerCts != null)
+                {
+                    _pipeServerCts.Cancel();
+                    // net462 下 WaitForConnectionAsync 对取消令牌响应不可靠，
+                    // 同时释放管道以中断等待
+                    try { _pipeServer?.Dispose(); } catch { }
+                }
+
+                if (_notifyIcon != null) _notifyIcon.Dispose();
+            }
             base.Dispose(disposing);
         }
     }
