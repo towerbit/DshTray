@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.IO.Pipes;
+using System.Management;
 using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
@@ -152,7 +153,8 @@ namespace DshTray
         {
             try
             {
-                _notifyIcon.ShowBalloonTip(3000, "",
+                // 故意设置一个较长的气泡提示时间，以便用户知道服务正在启动
+                _notifyIcon.ShowBalloonTip(60000, "",
                     "dsh web 服务正在启动，请稍候...", ToolTipIcon.Info);
                 var psi = new ProcessStartInfo
                 {
@@ -208,8 +210,11 @@ namespace DshTray
                     {
                         Application.DoEvents();
                     }
-                    //_notifyIcon.ShowBalloonTip(3000, "",
-                    //    "dsh web 服务已启动", ToolTipIcon.Info);
+                    
+                    // 通过隐藏和显示 NotifyIcon 间接关闭气泡提示
+                    _notifyIcon.Visible = false;
+                    Application.DoEvents();
+                    _notifyIcon.Visible = true;
                 }
                 catch(Exception ex)
                 {
@@ -381,44 +386,90 @@ namespace DshTray
             }
         }
 
+        private const string APP_ID = "deepseek-harness-web";
+        /// <summary>
+        /// 单独的 Edge 用户数据目录，用于存储 PWA 的配置和状态，
+        /// 主要用于查找和关闭窗口，避免影响其他的 Edge 浏览器实例
+        /// </summary>
+        private readonly string PROFILE_PATH = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            $"{Application.ProductName}\\Profile");
+
         private void OpenBrowser()
         {
-            string appUrl;
-            if (!string.IsNullOrWhiteSpace(_appUrl))
+            if (!string.IsNullOrEmpty(_appUrl))
             {
-                appUrl = _appUrl;
-            }
-            else
-            {
-                appUrl = $"http://127.0.0.1:{Properties.Settings.Default.WebPort}";
-            }
+                // 优先尝试使用 Edge PWA 方式打开
+                var edgePath = FindEdgeBrowser();
+                if (!string.IsNullOrEmpty(edgePath))
+                {
+                    try
+                    {
+                        // Edge PWA 模式参数
+                        var args = $"--app={_appUrl} --app-id={APP_ID} --user-data-dir=\"{PROFILE_PATH}\"";
+                        var psi = new ProcessStartInfo
+                        {
+                            FileName = edgePath,
+                            Arguments = args,
+                            UseShellExecute = false
+                        };
+                        Process.Start(psi);
+                        return;
+                    }
+                    catch { }
+                }
 
-            // 优先尝试使用 Edge PWA 方式打开
-            var edgePath = FindEdgeBrowser();
-            if (!string.IsNullOrEmpty(edgePath))
-            {
+                // 回退到默认浏览器
                 try
                 {
-                    // Edge PWA 模式参数
-                    var args = $"--app={appUrl} --app-id=deepseek-harness-web";
-                    var psi = new ProcessStartInfo
-                    {
-                        FileName = edgePath,
-                        Arguments = args,
-                        UseShellExecute = false
-                    };
-                    Process.Start(psi);
-                    return;
+                    Process.Start(_appUrl);
                 }
                 catch { }
             }
+            else
+            {
+                Debug.Print("WARN : _appUrl IsNullOrEmpty ");
+            }
+        }
 
-            // 回退到默认浏览器
+        /// <summary>
+        /// 关闭 Edge PWA 窗口
+        /// </summary>
+        private void CloseBrowser()
+        {
             try
             {
-                Process.Start(appUrl);
+                var searcher = new ManagementObjectSearcher(
+                    "SELECT ProcessId,CommandLine FROM Win32_Process WHERE Name='msedge.exe'");
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    var cmd = obj["CommandLine"] as string ?? string.Empty;
+                    Debug.Print(cmd);
+                    if (cmd.Contains($"--app-id={APP_ID}") &&
+                        cmd.Contains($"--user-data-dir=\"{PROFILE_PATH}\""))
+                    {
+                        if (int.TryParse(obj["ProcessId"]?.ToString(), out int pid))
+                        {
+                            try
+                            {
+                                var p = Process.GetProcessById(pid);
+                                if (!p.HasExited)
+                                    p.Kill();
+                            }
+                            catch 
+                            { 
+                                /* 忽略已退出或无权限 */ 
+                                Debug.Print($"WARN : CloseBrowser 无法终止进程 {pid}");
+                            }
+                        }
+                    }
+                }
             }
-            catch { }
+            catch 
+            { 
+                /* WMI 不可用时就没办法了，忽略 */ 
+                Debug.Print("WARN : CloseBrowser WMI 查询失败");
+            }
         }
 
         private void RestartDsh()
@@ -430,8 +481,11 @@ namespace DshTray
         private void ExitApp()
         {
             StopDsh();
+            CloseBrowser();
             _notifyIcon.Visible = false;
             _notifyIcon.Dispose();
+            // 删除用户数据目录可能会导致下次启动 Edge 变慢，暂时不删除
+            // try { Directory.Delete(PROFILE_PATH); } catch { }
             Application.Exit();
         }
 

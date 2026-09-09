@@ -34,7 +34,7 @@ namespace DshTray
                 };
                 using (var process = Process.Start(psi))
                 {
-                    process.WaitForExit(3000);
+                    process.WaitForExit();
                     isInstalled = process.ExitCode == 0;
                 }
             }
@@ -50,7 +50,8 @@ namespace DshTray
 
             #region 检查是否已有实例在运行
             bool createdNew;
-            _mutex = new Mutex(true, "DshTray_SingleInstance", out createdNew);
+            // 创建一个跨会话的全局命名的互斥体
+            _mutex = new Mutex(true, "Global\\DshTray_SingleInstance", out createdNew);
             if (!createdNew)
             {
                 // 如果已有实例在运行，则通过命名管道发送消息给已运行的实例，通知它打开窗口
