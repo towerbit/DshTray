@@ -51,6 +51,7 @@ namespace DshTray
             var contextMenu = new ContextMenuStrip();
             contextMenu.Items.Add("打开窗口", null, (s, e) => OpenBrowser());
             contextMenu.Items.Add("重启服务", null, (s, e) => RestartDsh());
+            contextMenu.Items.Add("清除缓存", null, (s, e) => ClearCache());
             contextMenu.Items.Add("关于", null, (s, e) => ShowAbout());
             contextMenu.Items.Add(new ToolStripSeparator());
             contextMenu.Items.Add("退出", null, (s, e) => ExitApp());
@@ -469,6 +470,31 @@ namespace DshTray
             { 
                 /* WMI 不可用时就没办法了，忽略 */ 
                 Debug.Print("WARN : CloseBrowser WMI 查询失败");
+            }
+        }
+
+        private void ClearCache()
+        {
+            CloseBrowser();
+
+            try
+            {
+                if (Directory.Exists(PROFILE_PATH))
+                {
+                    Directory.Delete(PROFILE_PATH, true);
+                    _notifyIcon.ShowBalloonTip(2000, "",
+                        "缓存已清除", ToolTipIcon.Info);
+                }
+                else
+                {
+                    _notifyIcon.ShowBalloonTip(2000, "",
+                        "缓存目录不存在，无需清除", ToolTipIcon.Info);
+                }
+            }
+            catch (Exception ex)
+            {
+                _notifyIcon.ShowBalloonTip(3000, "",
+                    "清除缓存失败: " + ex.Message, ToolTipIcon.Error);
             }
         }
 
